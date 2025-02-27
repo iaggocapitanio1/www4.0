@@ -1,0 +1,209 @@
+version: "3.9"
+
+services:
+    ww4api:
+        build: .
+        hostname: ww4api
+        command: gunicorn --bind 0.0.0.0:8000 authApi.wsgi --workers=4
+        depends_on:
+            -   db
+            - orion
+        restart: always
+        container_name: ww4api
+
+        environment:
+            - WW4API_EMAIL_USE_TLS=True
+            - WW4API_EMAIL_HOST=smtp.gmail.com
+            - WW4API_EMAIL_PORT=587
+            - WW4API_EMAIL_HOST_USER=ww4wood@gmail.com
+            - WW4API_EMAIL_HOST_PASSWORD=mwnwuekrexvhzzgr
+            - WW4API_DEFAULT_FROM_EMAIL=ww4wood@gmail.com
+            - WW4API_CORS_ALLOW_METHODS=DELETE,GET,OPTIONS,PATCH,POST,PUT
+            - WW4API_CREATE_AS_ACTIVE=True
+            - WW4API_POSTGRES_DB=woodwork
+            - WW4API_POSTGRES_USER=postgres
+            - WW4API_POSTGRES_HOST=db
+            - WW4API_ORION_HOST=http://orion:1026
+            - WW4API_POSTGRES_PORT=5432
+            - WW4API_POSTGRES_PASSWORD=postgres
+            - WW4API_ALLOWED_HOSTS=ww4api
+        ports:
+            -   8000:8000
+        volumes:
+            - .:/app
+
+
+    db:
+        image:  postgres:14.6-alpine
+        hostname: db
+        container_name: db
+        restart: always
+        environment:
+         - POSTGRES_PASSWORD=postgres
+         - POSTGRES_USER=postgres
+         - POSTGRES_DB=woodwork
+        expose:
+            - 5432
+        volumes:
+            - postgres-db:/var/lib/postgresql/data
+
+    mongo:
+        image: mongo:4.4
+        hostname: mongo
+        container_name: mongo
+        restart: always
+        expose:
+            - "27017"
+        command: --nojournal
+        environment:
+            - MONGO_DB_PORT=27017
+
+        volumes:
+            - mongo-db:/data/db
+            - mongo-config:/data/configdb
+        healthcheck:
+            test: |
+                host=`hostname --ip-address || echo '127.0.0.1'`;
+                mongo --quiet $$host/test --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' && echo 0 || echo 1
+            interval: 5s
+    orion:
+        image: fiware/orion-ld:1.1.0
+        hostname: orion
+        container_name: orion
+        restart: always
+        depends_on:
+            - mongo
+        expose:
+            - 1026
+        environment:
+            - ORIONLD_TROE=TRUE
+            - ORIONLD_TROE_USER=orion
+            - ORIONLD_TROE_PWD=orion
+            - ORIONLD_TROE_HOST=timescale
+            - ORIONLD_TROE_POOL_SIZE=20
+            - ORIONLD_MONGO_HOST=mongo
+            - ORION_LD_PORT=1026
+            - ORION_LD_VERSION=1.1.1
+            - ORIONLD_MULTI_SERVICE=TRUE
+            - ORIONLD_MONGO_POOL_SIZE=20
+            - ORIONLD_DISABLE_FILE_LOG=TRUE
+            - ORIONLD_MAX_CONN=2048
+            - ORIONLD_TRQ_POOL_SIZE=2
+            - ORIONLD_LOG_FOR_HUMANS=TRUE
+            - ORIONLD_CORS_ALLOWED_ORIGIN='__ALL'
+            - Access-Control-Allow-Headers=Content-Type, Fiware-Service, Fiware-Servicepath, Ngsiv2-AttrsFormat, Fiware-Correlator, X-Forwarded-For, X-Real-IP, X-Auth-Token
+        healthcheck:
+            test: curl --fail -s http://orion:1026/version || exit 1
+            interval: 10s
+            retries: 15
+        command: -dbhost mongo -logLevel ERROR -troePoolSize 20 -forwarding
+
+    timescale:
+        image: timescale/timescaledb-postgis:latest-pg12
+        restart: always
+        hostname: timescale
+        container_name: timescale
+        command: [ "postgres", "-c", "log_statement=none" ]
+        healthcheck:
+            test: [ "CMD-SHELL", "pg_isready -U orion" ]
+            interval: 15s
+            timeout: 15s
+            retries: 5
+            start_period: 60s
+        environment:
+            - POSTGRES_USER=orion
+            - POSTGRES_PASSWORD=orion
+            - POSTGRES_HOST_AUTH_METHOD=trust
+        expose:
+            - "5432"
+        volumes:
+            - timescale-db:/var/lib/postgresql/data
+    mintaka:
+        image: fiware/mintaka:0.3.39-distroless
+        hostname: mintaka
+        restart: always
+        container_name: mintaka
+        environment:
+            - DATASOURCES_DEFAULT_HOST=timescale
+            - DATASOURCES_DEFAULT_USERNAME=orion
+            - DATASOURCES_DEFAULT_PASSWORD=orion
+            - DATASOURCES_DEFAULT_DATABASE=orion
+            - DATASOURCES_DEFAULT_MAXIMUM_POOL_SIZE=2
+            - ENDPOINTS_INFO_ENABLED=true
+            - ENDPOINTS_INFO_SENSITIVE=false
+            - MINTAKA_PORT=8080
+            - TIMESCALE_PORT=5432
+        expose:
+            - "8080"
+        depends_on:
+            - timescale
+
+    pgadmin:
+        container_name: pgadmin
+        image: dpage/pgadmin4
+        hostname: pgadmin
+        restart: always
+        depends_on:
+            - timescale
+        environment:
+            - POSTGRES_DB=orion
+            - POSTGRES_USER=orion
+            - POSTGRES_HOST=timescale
+            - POSTGRES_PASSWORD=orion
+            - PGADMIN_DEFAULT_PASSWORD=orion
+            - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+            - PGADMIN_LISTEN_PORT=5050
+        volumes:
+            - pgadmin-data:/var/lib/pgadmin
+        expose:
+            - 5050
+        ports:
+            - "5050:5050"
+    syncthing:
+        image: syncthing/syncthing
+        container_name: syncthing
+        hostname: syncthing
+        environment:
+            - PUID=1000
+            - PGID=1000
+        volumes:
+            - ./syncthingFolder:/var/syncthing/
+        expose:
+            - 8384
+        ports:
+            - 22000:22000/tcp # TCP file transfers
+            - 22000:22000/udp # QUIC file transfers
+            - 21027:21027/udp # Receive local discovery broadcasts
+        restart: unless-stopped
+
+    nginx:
+        hostname: nginx
+        build: settings/nginx
+        restart: always
+        ports:
+            - 80:80
+            - 434:434
+        tty: true
+        volumes:
+            - ./data-models/context:/srv/ww4/context
+            - ./syncthingFolder/Sync:/srv/ww4/projects
+            - ./:/srv/ww4
+        depends_on:
+            - orion
+            - syncthing
+        networks:
+            - default
+
+volumes:
+    ww4api-data:
+        driver: local
+    mongo-db:
+        driver: local
+    mongo-config:
+        driver: local
+    timescale-db:
+        driver: local
+    postgres-db:
+        driver: local
+    pgadmin-data:
+        driver: local

@@ -1,0 +1,459 @@
+version: "3.9"
+
+services:
+    ww4api:
+        image: iaggo/woodwork4.0_api:1.1.0
+        hostname: ww4api
+        command: gunicorn --bind 0.0.0.0:8000 authApi.wsgi --workers=4
+        depends_on:
+            - db
+            - orion
+        restart: always
+        container_name: ww4api
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.14
+
+        environment:
+            - WW4API_SECRET_KEY=ROnousPlicaNSuBStARDOeKsHYsTanERPOULnU
+            - WW4API_HASHID_FIELD_SALT=afNSuBStARDOeKsHxnsSADodicn
+            - WW4API_EMAIL_USE_TLS=True
+            - WW4API_EMAIL_HOST=mail.nkaonline.net
+            - WW4API_EMAIL_PORT=587
+            - WW4API_EMAIL_HOST_USER=ww40@nkaonline.net
+            - WW4API_EMAIL_HOST_PASSWORD=Ww4.0_2022#
+            - WW4API_DEFAULT_FROM_EMAIL=ww40@nkaonline.net
+            - WW4API_CORS_ALLOW_METHODS=DELETE,GET,OPTIONS,PATCH,POST,PUT
+            - WW4API_CREATE_AS_ACTIVE=True
+            - WW4API_POSTGRES_DB=woodwork
+            - WW4API_POSTGRES_USER=postgres
+            - WW4API_POSTGRES_HOST=db
+            - WW4API_ORION_HOST=http://orion-proxy:1027
+            - WW4API_POSTGRES_PORT=5432
+            - WW4API_POSTGRES_PASSWORD=postgres
+            - WW4API_ALLOWED_HOSTS=ww4,woodwork4.ddns.net,localhost,127.0.0.1,ww4api,172.18.1.14
+            - WW4API_X_SCRIPT_NAME=/ww4/
+            - WW4API_PROTECTED_MEDIA_SERVER=nginx
+            - WW4API_PROTECTED_MEDIA_LOCATION_PREFIX=internal
+            - WW4API_KEYROCK_TOKEN_URL=http://keyrock:3005/oauth2/token
+            - WW4API_KEYROCK_CLIENT_ID=6691375e-8e16-450b-9e66-40509f36ce1d
+            - WW4API_KEYROCK_CLIENT_SECRET=1e1ba23f-f4a1-44ef-8ad0-5d8879f63125
+            - WW4API_CONTEXT=http://nginx:80/context/ww4zero.context-ngsi.jsonld
+            - WW4API_REDIRECT_TO_FRONT=True
+            - WW4API_CELERY_BROKER_REDIS_URL=redis://:eE5Q1wvQiK9nTKVge8oLd2t81@redis:6379
+            - WW4API_CELERY_RESULT_BACKEND=redis://:eE5Q1wvQiK9nTKVge8oLd2t81@redis:6379
+        expose:
+            - 8000
+        volumes:
+            - ./media:/home/app/media
+
+    db:
+        image: postgres:14.6-alpine
+        hostname: db
+        container_name: db
+        restart: always
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.2
+        environment:
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_USER=postgres
+            - POSTGRES_DB=woodwork
+        expose:
+            - 5432
+        ports:
+            - 5432:5432
+        volumes:
+            - postgres-db:/var/lib/postgresql/data
+
+    mongo:
+        image: mongo:4.4
+        hostname: mongo
+        container_name: mongo
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.3
+        restart: always
+        expose:
+            - "27017"
+        command: --nojournal
+        environment:
+            - MONGO_DB_PORT=27017
+
+        volumes:
+            - mongo-db:/data/db
+            - mongo-config:/data/configdb
+        healthcheck:
+            test: |
+                host=`hostname --ip-address || echo '127.0.0.1'`;
+                mongo --quiet $$host/test --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' && echo 0 || echo 1
+            interval: 5s
+    orion:
+        image: fiware/orion-ld:1.1.0
+        hostname: orion
+        container_name: orion
+        restart: always
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.4
+        depends_on:
+            - mongo
+        expose:
+            - 1026
+        environment:
+            - ORIONLD_TROE=TRUE
+            - ORIONLD_TROE_USER=orion
+            - ORIONLD_TROE_PWD=orion
+            - ORIONLD_TROE_HOST=timescale
+            - ORIONLD_TROE_POOL_SIZE=20
+            - ORIONLD_MONGO_HOST=mongo
+            - ORION_LD_PORT=1026
+            - ORION_LD_VERSION=1.1.1
+            - ORIONLD_MULTI_SERVICE=TRUE
+            - ORIONLD_MONGO_POOL_SIZE=20
+            - ORIONLD_DISABLE_FILE_LOG=TRUE
+            - ORIONLD_MAX_CONN=2048
+            - ORIONLD_TRQ_POOL_SIZE=2
+            - ORIONLD_LOG_FOR_HUMANS=TRUE
+            - WW4API_X_SCRIPT_NAME=/ww4
+            - ORIONLD_CORS_ALLOWED_ORIGIN=__ALL
+            - Access-Control-Allow-Headers=Content-Type, Fiware-Service, Fiware-Servicepath, Ngsiv2-AttrsFormat, Fiware-Correlator, X-Forwarded-For, X-Real-IP, X-Auth-Token
+        healthcheck:
+            test: curl --fail -s http://orion:1026/version || exit 1
+            interval: 10s
+            retries: 15
+        command: -dbhost mongo -logLevel ERROR -troePoolSize 20 -forwarding
+
+    timescale:
+        image: timescale/timescaledb-postgis:1.7.5-pg12
+        restart: always
+        hostname: timescale
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.5
+        container_name: timescale
+        command: [ "postgres", "-c", "log_statement=none" ]
+        healthcheck:
+            test: [ "CMD-SHELL", "pg_isready -U orion" ]
+            interval: 15s
+            timeout: 15s
+            retries: 5
+            start_period: 60s
+        environment:
+            - POSTGRES_USER=orion
+            - POSTGRES_PASSWORD=orion
+            - POSTGRES_HOST_AUTH_METHOD=trust
+        expose:
+            - "5432"
+        volumes:
+            - timescale-db:/var/lib/postgresql/data
+    mintaka:
+        image: fiware/mintaka:0.3.39-distroless
+        hostname: mintaka
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.6
+        restart: always
+        container_name: mintaka
+        environment:
+            - DATASOURCES_DEFAULT_HOST=timescale
+            - DATASOURCES_DEFAULT_USERNAME=orion
+            - DATASOURCES_DEFAULT_PASSWORD=orion
+            - DATASOURCES_DEFAULT_DATABASE=orion
+            - DATASOURCES_DEFAULT_MAXIMUM_POOL_SIZE=2
+            - ENDPOINTS_INFO_ENABLED=true
+            - ENDPOINTS_INFO_SENSITIVE=false
+            - MINTAKA_PORT=8080
+            - TIMESCALE_PORT=5432
+        expose:
+            - "8080"
+        depends_on:
+            - timescale
+
+    syncthing:
+        image: syncthing/syncthing
+        container_name: syncthing
+        hostname: syncthing
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.8
+        environment:
+            - PUID=1000
+            - PGID=1000
+        volumes:
+            - ./media/public/mofreitas/:/var/syncthing/
+        expose:
+            - 8384
+        ports:
+            - 22000:22000/tcp # TCP file transfers
+            - 22000:22000/udp # QUIC file transfers
+            - 21027:21027/udp # Receive local discovery broadcasts
+        restart: unless-stopped
+
+    nginx:
+        hostname: nginx
+        build: settings/nginx
+        restart: always
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.9
+        ports:
+            - 80:80
+            - 434:434
+        tty: true
+        volumes:
+            - ./context:/srv/ww4/context
+            - ./staticfiles:/srv/ww4/api/staticfiles
+            - ./media:/srv/ww4/api/media
+        depends_on:
+            - orion
+            - syncthing
+    keyrock:
+        image: fiware/idm:7.6.0
+        container_name: fiware-keyrock
+        hostname: keyrock
+        restart: always
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.11
+        depends_on:
+            - mysql-db
+        ports:
+            - '3005:3005'
+            - '443:443'
+        environment:
+            - DEBUG=idm:*
+            - IDM_DB_HOST=mysql-db
+            - IDM_DB_PASS=secret
+            - IDM_DB_USER=root
+            - IDM_HOST=http://localhost:3005
+            - IDM_PORT=3005
+            - IDM_HTTPS_PORT=3443
+            - IDM_ADMIN_USER=admin
+            - IDM_ADMIN_EMAIL=iaggo.capitanio@gmail.com
+            - IDM_ADMIN_PASS=test
+            - IDM_EMAIL_HOST=mailer
+            - IDM_EMAIL_PORT=25
+            - IDM_ENCRYPTION_KEY=ww4Cypher
+            - IDM_OAUTH_AUTH_LIFETIME=18000 # 5 hours
+
+        healthcheck:
+            interval: 5s
+
+    mysql-db:
+        restart: always
+        image: mysql:5.7
+        hostname: mysql-db
+        container_name: db-mysql
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.10
+        expose:
+            - 3306
+        environment:
+            - 'MYSQL_ROOT_PASSWORD=secret'
+            - "MYSQL_ROOT_HOST=172.18.1.11"
+        volumes:
+            - mysql-db:/var/lib/mysql
+
+    orion-proxy:
+        image: fiware/pep-proxy:8.0.0-distroless
+        container_name: fiware-orion-proxy
+        hostname: orion-proxy
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.12
+        depends_on:
+            keyrock:
+                condition: service_started
+        deploy:
+            restart_policy:
+                condition: on-failure
+        expose:
+            - "1027"
+        ports:
+            - "1027:1027"
+        environment:
+            - DEBUG=pep-proxy:*
+            - PEP_PROXY_DEBUG=true
+            - PEP_PROXY_APP_HOST=orion
+            - PEP_PROXY_APP_PORT=1026
+            - PEP_PROXY_PORT=1027
+            - PEP_PROXY_IDM_HOST=keyrock
+            - PEP_PROXY_HTTPS_ENABLED=false
+            - PEP_PROXY_IDM_SSL_ENABLED=false
+            - PEP_PROXY_IDM_PORT=3005
+            - PEP_PROXY_AUTH_ENABLED=false
+            - PEP_PROXY_EXPOSED_HEADERS=NGSILD-Results-Count
+            - PEP_PROXY_APP_ID=6691375e-8e16-450b-9e66-40509f36ce1d
+            - PEP_PROXY_USERNAME=pep_proxy_2cd2ce2c-2fc4-44eb-aaff-fb6c43348b10
+            - PEP_PROXY_PUBLIC_PATHS=/version
+            - PEP_PASSWORD=pep_proxy_c2bed49c-af61-4e64-aa17-63d1508a7511
+            - PEP_PROXY_MAGIC_KEY=1234
+            - ORIONLD_CORS_ALLOWED_ORIGIN=__ALL
+        healthcheck:
+            test: curl --fail -s http://orion-proxy:1027/version || exit 1
+
+    mailer:
+        restart: always
+        image: mazdermind/docker-mail-relay
+        hostname: mailer
+        container_name: mailer
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.13
+        expose:
+            - 25
+        environment:
+            - SMTP_LOGIN=ww4wood@gmail.com
+            - SMTP_PASSWORD=mwnwuekrexvhzzgr
+            - EXT_RELAY_HOST=smtp.gmail.com
+            - EXT_RELAY_PORT=587x
+            - ACCEPTED_NETWORKS=172.18.1.0/24
+            - USE_TLS=yes
+
+    watcher:
+        hostname: watcher
+        image: iaggo/watcher:0.0.1
+        restart: always
+        tty: true
+        volumes:
+            - ./media/public/mofreitas/clients/project:/home/app/Projects
+            - ./logs:/home/app/logs
+        environment:
+        - CLIENT_ID=b33ed854-1682-4d41-a035-4b7be543790b
+        - CLIENT_SECRET=7e60884d-8cb9-4795-9584-8af8b807916c
+        - TOKEN_URL=http://keyrock:3005/oauth2/token
+        - WW4_GET_CUSTOMER_URL=http://ww4api:8000/api/v1/accounts/get-customer/
+        - PROJECTS_DIR=/home/app/Projects
+        - ORION_HOST=http://orion-proxy:1027
+        - NGSI_LD_CONTEXT=http://nginx:80/context/ww4zero.context-ngsi.jsonld
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.15
+    mosquitto:
+        image: eclipse-mosquitto:1.6.14
+        hostname: mosquitto
+        container_name: mosquitto
+        expose:
+            - "1883"
+            - "9001"
+        ports:
+            - "1883:1883"
+            - "9001:9001"
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.16
+    redis:
+        image: redis:7.0.11-alpine
+        hostname: redis
+        restart: always
+        ports:
+            - '6379:6379'
+        command: redis-server --save 20 1 --loglevel warning --requirepass eE5Q1wvQiK9nTKVge8oLd2t81
+        volumes:
+            - redis-cache:/data
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.17
+
+    celery-worker:
+        image: iaggo/woodwork4.0_api:1.1.0
+        hostname: celery-worker
+        command: celery -A authApi worker --loglevel=info --concurrency=4
+        depends_on:
+            - db
+            - orion
+            - ww4api
+            - redis
+        restart: always
+        container_name: celery-worker
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.18
+        environment:
+            - WW4API_SECRET_KEY=ROnousPlicaNSuBStARDOeKsHYsTanERPOULnU
+            - WW4API_SKIP_ENTRYPOINT=1
+            - WW4API_HASHID_FIELD_SALT=afNSuBStARDOeKsHxnsSADodicn
+            - WW4API_EMAIL_USE_TLS=True
+            - WW4API_EMAIL_HOST=mail.nkaonline.net
+            - WW4API_EMAIL_PORT=587
+            - WW4API_EMAIL_HOST_USER=ww40@nkaonline.net
+            - WW4API_EMAIL_HOST_PASSWORD=Ww4.0_2022#
+            - WW4API_DEFAULT_FROM_EMAIL=ww40@nkaonline.net
+            - WW4API_CORS_ALLOW_METHODS=DELETE,GET,OPTIONS,PATCH,POST,PUT
+            - WW4API_CREATE_AS_ACTIVE=True
+            - WW4API_POSTGRES_DB=woodwork
+            - WW4API_POSTGRES_USER=postgres
+            - WW4API_POSTGRES_HOST=db
+            - WW4API_ORION_HOST=http://orion-proxy:1027
+            - WW4API_POSTGRES_PORT=5432
+            - WW4API_POSTGRES_PASSWORD=postgres
+            - WW4API_ALLOWED_HOSTS=ww4,woodwork4.ddns.net,localhost,127.0.0.1,ww4api,172.18.1.14
+            - WW4API_X_SCRIPT_NAME=/ww4/
+            - WW4API_PROTECTED_MEDIA_SERVER=nginx
+            - WW4API_PROTECTED_MEDIA_LOCATION_PREFIX=internal
+            - WW4API_KEYROCK_TOKEN_URL=http://keyrock:3005/oauth2/token
+            - WW4API_KEYROCK_CLIENT_ID=6691375e-8e16-450b-9e66-40509f36ce1d
+            - WW4API_KEYROCK_CLIENT_SECRET=1e1ba23f-f4a1-44ef-8ad0-5d8879f63125
+            - WW4API_CONTEXT=http://nginx:80/context/ww4zero.context-ngsi.jsonld
+            - WW4API_REDIRECT_TO_FRONT=True
+            - WW4API_CELERY_BROKER_REDIS_URL=redis://:eE5Q1wvQiK9nTKVge8oLd2t81@redis:6379
+            - WW4API_CELERY_RESULT_BACKEND=redis://:eE5Q1wvQiK9nTKVge8oLd2t81@redis:6379
+        volumes:
+            - ./media:/home/app/media
+
+    easmfilefinder:
+        image: iaggo/file_wwatcher_4.0:0.0.1
+        hostname: easmfilefinder
+        restart: always
+        container_name: easmfilefinder
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.19
+        environment:
+            - CLIENT_ID=VLK3F8fPJmZwbfjm2o4x6hliRghZmivVmJMJSgIN
+            - CLIENT_SECRET=dIQCQf4LP3JO0o2A419b9dErsGeg3miHUfHYFEpNta4fsLakdt5RQrY80ctCgVul9tWYyDw4ZHQxJBMzvj2Siyou3ebk8JraEQGUBxSVBk1RbRlaRJ36PmBQ93FsjJWF
+            - TOKEN_URL=http://ww4api:8000/auth/token
+            - WATCHING_DIR=/home/app/clientes
+            - URL=http://ww4api:8000/api/v1
+        volumes:
+            - ./media/public/mofreitas/clientes:/home/app/clientes
+            - ./logs/easmfilefinder:/home/app/logs
+
+    xlsxfilefinder:
+        image: iaggo/file_wwatcher_4.0:0.0.1
+        hostname: xlsxfilefinder
+        restart: always
+        container_name: xlsxfilefinder
+        networks:
+            woodworkNET:
+                ipv4_address: 172.18.1.20
+        environment:
+            - CLIENT_ID=VLK3F8fPJmZwbfjm2o4x6hliRghZmivVmJMJSgIN
+            - CLIENT_SECRET=dIQCQf4LP3JO0o2A419b9dErsGeg3miHUfHYFEpNta4fsLakdt5RQrY80ctCgVul9tWYyDw4ZHQxJBMzvj2Siyou3ebk8JraEQGUBxSVBk1RbRlaRJ36PmBQ93FsjJWF
+            - TOKEN_URL=http://ww4api:8000/auth/token
+            - WATCHING_DIR=/home/app/clientes
+            - URL=http://ww4api:8000/api/v1
+            - CATEGORY=XLSX
+        volumes:
+            - ./media/public/mofreitas/clientes:/home/app/clientes
+            - ./logs/xlsxfilefinder:/home/app/logs
+networks:
+    woodworkNET:
+        ipam:
+            config:
+                - subnet: 172.18.1.0/24
+
+volumes:
+    mongo-db:
+        driver: local
+    mongo-config:
+        driver: local
+    timescale-db:
+        driver: local
+    redis-cache:
+        driver: local
+    postgres-db:
+        driver: local
+    mysql-db: ~
